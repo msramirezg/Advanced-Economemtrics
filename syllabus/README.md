@@ -19,7 +19,7 @@ Materials for **Advanced Econometrics** focused on modern micro-econometric meth
 
 ---
 
-## Repo structure (suggested)
+## Repo structure
 
 ```
 /syllabus/              # PDF + this README
