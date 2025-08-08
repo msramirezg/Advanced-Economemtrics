@@ -123,8 +123,4 @@ Below each topic you’ll see **Core chapters** (read before class) and the **Ma
 * **Grading/curve:** numeric 1.5–5.0; weighted average; no rounding; a curve may be applied without harming anyone or changing ranks. &#x20;
 * **Academic integrity:** Fraud in **any** assessment (workshops, quizzes, exams, final work) is prohibited and can receive a grade of **0** plus disciplinary action.&#x20;
 
----
 
-### Maintainer tip
-
-Want me to **drop this into a `README.md`** and scaffold the folders for you? Say the word and I’ll generate the files.
