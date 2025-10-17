@@ -1,269 +1,241 @@
-############################################################
-# Proyecto: Lumeria 1989 — TV extranjera y apoyo al régimen
-# Autor: (tu nombre)
-# Fecha: Sys.Date()
-# Descripción: Script reproducible para (1) descriptivas,
-# (2) MCO, (3) IV 2SLS con Z como instrumento de D,
-# (4) comparación MCO vs IV, (5) Wald, (6) interpretación LATE.
-# Notación/Metodología basada en "s9_IV.pdf".
-#   - Teorema LATE y supuestos I–IV (independencia, exclusión,
-#     relevancia, monotonicidad)  :contentReference[oaicite:0]{index=0}  :contentReference[oaicite:1]{index=1}
-#   - Estimador de Wald (poblacional y análogo muestral)        :contentReference[oaicite:2]{index=2}  :contentReference[oaicite:3]{index=3}
-#   - MC2E / 2SLS formal (proyecciones y 2ª etapa)              :contentReference[oaicite:4]{index=4}  :contentReference[oaicite:5]{index=5}  :contentReference[oaicite:6]{index=6}
-#   - Primera etapa y relevancia (condición de rango / F)       :contentReference[oaicite:7]{index=7}  :contentReference[oaicite:8]{index=8}
-#   - LATE, ATT, ATE y cuándo coinciden                         :contentReference[oaicite:9]{index=9}  :contentReference[oaicite:10]{index=10}
-############################################################
+# ----------------------------------------------------------  # 
+# Proyecto: Lumeria 1989 — TV extranjera y apoyo al régimen   # Contexto. 
+# Autor: Mahicol Ramírez - Simón Briceño                      # Autores.
+# Fecha: 24 de octubre de 2025                                # Fecha.
+# Descripción: 
+# - 1. Descriptivas útiles para IV y tablas LaTeX             # Bloque 1: insumos para estadística descriptiva.
+# - 2. MCO                                                    # Bloque 2: benchmark potencialmente sesgado.
+# - 3. IV (2SLS) con z como instrumento de d                  # Bloque 3: estrategia causal principal (LATE).
+# - 4. Comparación MCO vs IV                                  # Bloque 4: contraste de magnitud/signo (sesgo MCO).
+# - 5. Wald y comentarios analíticos                          # Bloque 5: versión cerrada con Z,D binarios.
+# Metodología: sesión 9 (s9_IV.pdf) sobre IV                  # Referencia metodológica general.
+# ----------------------------------------------------------
 
-#### 0) Paquetes ----
-# Cada library() carga un paquete necesario para lectura, estimación y tablas.
-# Si algún paquete no está instalado, descomenta la línea install.packages().
-# install.packages(c("haven","dplyr","stringr","broom","AER","sandwich","lmtest","modelsummary"))
-library(haven)        # leer .dta
-library(dplyr)        # manipulación
-library(stringr)      # utilidades de cadenas
-library(broom)        # tidiers para modelos
-library(AER)          # ivreg (2SLS) y diagnósticos
-library(sandwich)     # VCOV robustas / cluster
-library(lmtest)       # coeftest con vcov
-library(modelsummary) # tablas comparativas (opcional)
+# 0. Paquetes ------------------------------------------------ # Cargar librerías necesarias para EDA, IV y reporte.
+# install.packages(c("haven","dplyr","AER","sandwich","lmtest","modelsummary","knitr","kableExtra"))  # Instalación (si faltan); se deja comentada para no interrumpir.
+library(haven)        # Lectura de .dta (Stata), permite importar Lumeria1989.dta.
+library(dplyr)        # Manipulación de datos (pipes, summarise, group_by, etc.).
+library(AER)          # Función ivreg() para 2SLS y diagnósticos de instrumentos.
+library(sandwich)     # Matrices de var-cov robustas (HC) para errores robustos.
+library(lmtest)       # coeftest() para estimaciones con vcov robusta.
+library(modelsummary) # Tablas de modelos comparables (MCO vs IV) de forma compacta.
+library(knitr)        # kable() para generar tablas LaTeX de salida.
+library(kableExtra)   # Estética LaTeX (booktabs/striped) para tablas descriptivas.
 
-#### 1) Cargar datos ----
-# Leemos la base entregada: Lumeria1989.dta
-df <- read_dta("Lumeria1989.dta")
+# Fijar WD al directorio del script (RStudio) ---- # Conveniencia: hace que rutas relativas apunten al script.
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) # Cambia el WD al folder del script;
 
-# Estandarizamos nombres a minúsculas para detección flexible
-names(df) <- tolower(names(df))
+# 1. Cargar datos y definir variables ------------------------# Inicia el flujo: importar y declarar nombres relevantes.
+df <- read_dta("Lumeria1989.dta")                             # Lee la base en formato Stata con variables ya estandarizadas.
 
-#### 1.1) Mapeo de variables clave ----
-# Intentamos detectar automáticamente:
-#  - z: acceso técnico a la señal extranjera (instrumento, binario)
-#  - d: ver efectivamente la TV extranjera (tratamiento, binario)
-#  - y: apoyo al régimen (resultado, binario o continuo)
-#  - controles: edad, sexo, educación, urbano (si existen)
-# Si tus nombres difieren, AJUSTA el vector 'aliases' o asigna manualmente.
+# - Nombres esperados en la base -----------------------------# Documentamos la expectativa de nombres (no ejecuta lógica).
+# id, region, z, d, y, age, female, educ, urban, valley
+ctrls     <- c("age","female","educ","urban")                 # Vector de controles X usados en MCO/IV (edad, mujer, educación, urbano).
+bin_vars  <- c("Y","D","Z","female","urban", "valley")        # Variables binarias para proporciones útiles (prevalencias).
+cont_vars <- c("age","educ")                                  # Variables continuas para dispersión/outliers (no normalidad).
 
-aliases <- list(
-  z = c("z_ir","z","acceso","access","signal","cobertura"),
-  d = c("d_i","d","ver","tv_ext","tvextranjera","watch"),
-  y = c("y_i","y","apoyo","support","vota_regimen","voto_regimen"),
-  edad = c("edad","age"),
-  sexo = c("sexo","sex","female","male"),
-  educ = c("educ","educacion","schooling","years_school"),
-  urbano = c("urbano","urban","ciudad")
-)
+# 2. Estadísticas descriptivas (útiles para IV) --------------#
+# 2.1. Global: binarios (proporción) y continuos (dispersión) # Computa proporciones y tamaños que informan prevalencia/balance.
+desc_bin <- df %>%                                            # Inicia pipeline sobre df.
+  summarise(across(all_of(bin_vars),                          # Aplica a todas las binarias definidas.
+                   list(share = ~mean(.x, na.rm=TRUE),        # share = proporción de 1s (media).
+                        n     = ~sum(!is.na(.x)),             # n = conteo no-missing, útil para ver tamaño de muestra real.
+                        n0    = ~sum(.x==0, na.rm=TRUE)),     # n0 = cantidad de ceros, complemento de n1.
+                   .names="{.col}_{.fn}"))                    # Nombra columnas como var_función para facilitar reshape.
+print(desc_bin, width = Inf)                                               # Muestra en consola para revisión rápida.
 
-pick_var <- function(candidates, data){
-  found <- intersect(candidates, names(data))
-  if(length(found)==0) return(NA_character_)
-  found[1]
-}
+qfun <- function(x,p) quantile(x, probs=p, na.rm=TRUE, names=FALSE) # Helper para percentiles sin nombres (limpio para tablas).
+desc_cont <- df %>%                                           # Pipeline para continuas.
+  summarise(across(all_of(cont_vars),                         # Aplica a age y educ.
+                   list(mean=~mean(.x,na.rm=TRUE),            # Media: tendencia central (útil para comparar por Z).
+                        sd=~sd(.x,na.rm=TRUE),                # Desviación estándar: dispersión (heterogeneidad).
+                        p25=~qfun(.x,0.25),                   # Percentil 25: límite inferior de rango intercuartílico.
+                        p50=~qfun(.x,0.50),                   # Mediana: robusta a outliers, útil para asimetrías.
+                        p75=~qfun(.x,0.75),                   # Percentil 75: límite superior de IQR.
+                        min=~min(.x,na.rm=TRUE),              # Mínimo observado: detectar valores extremos bajos.
+                        max=~max(.x,na.rm=TRUE),              # Máximo observado: detectar valores extremos altos.
+                        iqr=~IQR(.x,na.rm=TRUE),              # Rango intercuartílico: dispersión robusta.
+                        miss_share=~mean(is.na(.x))),         # Proporción de NA: calidad de datos y tamaño efectivo.
+                   .names="{.col}_{.fn}"))                    # Nombres compuestos por claridad.
+print(desc_cont, width = Inf)                                              # Imprime la tabla de continuas.
 
-var_z     <- pick_var(aliases$z, df)
-var_d     <- pick_var(aliases$d, df)
-var_y     <- pick_var(aliases$y, df)
-var_edad  <- pick_var(aliases$edad, df)
-var_sexo  <- pick_var(aliases$sexo, df)
-var_educ  <- pick_var(aliases$educ, df)
-var_urb   <- pick_var(aliases$urbano, df)
-
-# Lista de controles disponibles en la base
-ctrls <- c(var_edad, var_sexo, var_educ, var_urb)
-ctrls <- ctrls[!is.na(ctrls)]
-
-# Validación mínima
-needed <- c(var_z, var_d, var_y)
-if(any(is.na(needed))){
-  stop("No pude detectar Z/D/Y automáticamente. Ajusta 'aliases' o asigna var_z/var_d/var_y manualmente.")
-}
-
-#### 1.2) Limpieza ligera ----
-# Aseguramos binariedad de Z y D si vienen como numéricas no 0/1:
-df <- df %>%
-  mutate(
-    !!var_z := as.integer(!!sym(var_z) > 0),
-    !!var_d := as.integer(!!sym(var_d) > 0)
+# 2.2. Por acceso (z): prevalencias/medias y tamaño ----------# Compara por Z para ver balance y 1ª etapa intuitiva.
+by_z_means <- df %>%                                          # Inicia pipeline por grupos de Z.
+  group_by("Z") %>%                                             # Agrupa por el instrumento (cobertura vs sombra).
+  summarise(
+    across(c("Y","D",all_of(cont_vars)), ~mean(.x, na.rm=TRUE), .names="{.col}_mean"), # Medias de Y,D y continuas por Z.
+    across(all_of(bin_vars), ~mean(.x, na.rm=TRUE), .names="{.col}_share"),            # Proporciones de binarias por Z.
+    n = dplyr::n(),                                            # Tamaño del grupo (diagnóstico de equilibrio muestral).
+    .groups="drop"                                             # Soltar estructura de agrupamiento tras summarise.
   )
+print(by_z_means, width = Inf)                                             # Visualiza diferencia por Z.
 
-#### 2) (P1) Estadísticas descriptivas ----
-# Objetivo: caracterizar apoyo (Y), exposición (D), acceso (Z) y demografía.
-# Producimos medias generales y por Z (cobertura vs sombra).
-desc_vars <- c(var_y, var_d, var_z, ctrls)
-desc_label <- setNames(desc_vars, desc_vars)
-
-# Descriptivas globales
-desc_global <- df %>%
-  summarise(across(all_of(desc_vars),
-                   list(mean = ~mean(.x, na.rm=TRUE),
-                        sd   = ~sd(.x, na.rm=TRUE)),
-                   .names = "{.col}_{.fn}"))
-
-print(desc_global)
-
-# Descriptivas por acceso (Z)
-desc_by_z <- df %>%
-  group_by(!!sym(var_z)) %>%
-  summarise(across(all_of(desc_vars), ~mean(.x, na.rm=TRUE), .names = "{.col}_mean"),
-            n = n(), .groups="drop")
-print(desc_by_z)
-
-# Diferencias de medias Y, D y controles entre Z=1 vs Z=0 (t-test):
-diff_tests <- lapply(setNames(desc_vars, desc_vars), function(v){
-  t.test(df[[v]] ~ df[[var_z]])
-})
-# Vistazo rápido:
-lapply(diff_tests[c(var_y, var_d, ctrls)], function(tt) c(est=unname(diff(tt$estimate)), p=tt$p.value))
-
-# RESPUESTA P1 (≤150 palabras, comentario):
-# Hallamos diferencias descriptivas entre regiones con y sin acceso (Z): si E[D|Z=1] >> E[D|Z=0],
-# hay relevancia mecánica del instrumento. Si E[Y|Z=1] ≠ E[Y|Z=0], el "reduced form" sugiere
-# asociación total (vía todos los canales). Diferencias en X por Z alertan sobre composición:
-# si controles difieren (edad, educación, urbano), el ajuste por X será clave. Implicación:
-# MCO en Y~D puede estar sesgado por selección; usar Z como variable instrumental permite
-# separar la variación “as good as random” inducida por la geografía de señal. No obstante,
-# si Z correlaciona con factores políticos locales que afectan Y aparte de D, podría fallar
-# la exclusión. Estas pautas condicionan la interpretación causal posterior.
-
-#### 3) (P2) MCO y sesgo de selección ----
-# Ecuación: Y_i = α + β D_i + γ' X_i + u_i
-# β capta el cambio promedio en Y al pasar de no ver a ver TV extranjera, condicional en X.
-# Sesgo: si D_i está correlacionada con u_i (gusto político, redes, censura local), β_MCO no es causal.
-
-# Fórmulas de regresión
-f_ols <- as.formula(
-  paste(var_y, "~", var_d, if(length(ctrls)>0) paste("+", paste(ctrls, collapse="+")) else "")
+# 2.3. Balance por z (SMD) ----------------------------------- # Diferencia estandarizada: métrica de balance (unidad libre).
+smd <- function(x, g){                                        # Define función para SMD entre z=1 y z=0.
+  m1 <- mean(x[g==1], na.rm=TRUE); m0 <- mean(x[g==0], na.rm=TRUE) # Medias por grupo.
+  s1 <- var(x[g==1], na.rm=TRUE);  s0 <- var(x[g==0], na.rm=TRUE)  # Varianzas por grupo.
+  sd_pooled <- sqrt( ((sum(g==1,na.rm=TRUE)-1)*s1 + (sum(g==0,na.rm=TRUE)-1)*s0) /    # Desvío combinado (pooled).
+                       (sum(g %in% c(0,1),na.rm=TRUE)-2) )
+  (m1 - m0) / sd_pooled                                       # Retorna SMD: >|0.1| alerta desbalance sustantivo.
+}
+balance_tbl <- data.frame(                                    # Construye tabla de balance para X.
+  var = c("age","educ","female","urban"),                     # Variables a evaluar en balance (controles).
+  mean_z1 = sapply(c("age","educ","female","urban"), \(v) mean(df[[v]][df$Z==1], na.rm=TRUE)), # Media en Z=1.
+  mean_z0 = sapply(c("age","educ","female","urban"), \(v) mean(df[[v]][df$Z==0], na.rm=TRUE))  # Media en Z=0.
 )
+balance_tbl$diff <- balance_tbl$mean_z1 - balance_tbl$mean_z0 # Diferencia en medias (escala natural).
+balance_tbl$SMD  <- sapply(c("age","educ","female","urban"), \(v) smd(df[[v]], df$Z)) # SMD por variable.
+print(balance_tbl)                                            # Imprime balance; |SMD|<0.1 muy bueno, <0.25 aceptable.
 
-# Estimación MCO con errores robustos (HC1)
-ols_fit <- lm(f_ols, data=df)
-ols_vcov <- vcovHC(ols_fit, type="HC1")
-ols_res  <- coeftest(ols_fit, vcov.=ols_vcov)
-print(ols_res)
+# 2.4. Momentos clave IV: E[D|Z] y E[Y|Z] -------------------- # Insumos para relevancia (1ª etapa) y reduced form (numerador Wald).
+ED_Z <- df %>% group_by(Z) %>% summarise(E_D = mean(D, na.rm=TRUE), n=n(), .groups="drop") # E[D|Z] y tamaño por Z.
+EY_Z <- df %>% group_by(Z) %>% summarise(E_Y = mean(Y, na.rm=TRUE), n=n(), .groups="drop") # E[Y|Z] y tamaño por Z.
+print(ED_Z); print(EY_Z)                                     # Vista de ambos valores esperados  condicionales.
+cat("ΔE[D|Z] =", diff(ED_Z$E_D), " |  ΔE[Y|Z] =", diff(EY_Z$E_Y), "\n") # Diferencias: relevancia y reduced form para Wald.
 
-# RESPUESTA P2(a) (≤150 palabras):
-# Interpretación: β es el efecto medio condicional de D sobre Y. No es necesariamente causal
-# porque D_i puede ser endógena (autoselección en ver TV extranjera, variables omitidas).
-# Sin un diseño cuasi-experimental, β mezcla causalidad con correlaciones espurias.
-# RESPUESTA P2(b) (≤150 palabras):
-# No observados potencialmente sesgantes: (i) preferencia política previa por el régimen;
-# (ii) tolerancia al riesgo de sanciones; (iii) capital social y acceso a redes informativas;
-# (iv) calidad del cable clandestino; (v) vigilancia local. Tales factores influyen en D (ver)
-# y en Y (apoyo), correlacionando D con u_i.
+# 2.5. Outliers informativos (regla IQR) en continuas -------- # Diagnóstico simple para errores de captura.
+flag_outliers <- function(x){                                 # Define detector basado en 1.5*IQR.
+  qs <- quantile(x, c(.25,.75), na.rm=TRUE); i <- IQR(x, na.rm=TRUE) # Cuartiles y rango intercuartílico.
+  lo <- qs[1] - 1.5*i; hi <- qs[2] + 1.5*i                   # Umbrales inferior y superior.
+  which(x < lo | x > hi)                                      # Índices outlier; sólo informativo (no modifica datos).
+}
+cat("Outliers(age)  =", length(flag_outliers(df$age)),        # Reporta cantidad de outliers en age (posibles errores).
+    " | Outliers(educ) =", length(flag_outliers(df$educ)), "\n") # Reporta cantidad en educ.
 
-#### 4) (P3) IV / 2SLS con Z como instrumento de D ----
-# Primera etapa: D_i = π0 + π1 Z_i + δ' X_i + v_i   (relevancia: π1 ≠ 0)
-# Segunda etapa: Y_i = α + τ D̂_i + γ' X_i + ε_i   (τ es el efecto causal LATE sobre compliers)
-# Notación/MC2E: ver s9_IV.pdf  :contentReference[oaicite:11]{index=11}  :contentReference[oaicite:12]{index=12}
+# 2.6. Correlaciones básicas --------------------------------- # Chequeo de señales y colinealidad simple entre Y,D,Z y X.
+corr_vars <- c("Y","D","Z","age","educ","female","urban")     # Conjunto de interés para correlación.
+corr_mat  <- cor(df[, corr_vars], use="pairwise.complete.obs")# Matriz de correlaciones con pairwise NA-handling.
+print(round(corr_mat, 2))                                     # Redondeo a 3 decimales para lectura.
 
-# Fórmulas para ivreg (AER): Y ~ D + X | Z + X
-f_iv <- as.formula(
-  paste(var_y, "~", var_d, if(length(ctrls)>0) paste("+", paste(ctrls, collapse="+")) else "",
-        "|", var_z,        if(length(ctrls)>0) paste("+", paste(ctrls, collapse="+")) else "")
-)
+# 3. MCO ----------------------------------------------------- # Estimación benchmark: susceptible a sesgo por endogeneidad de d.
+f_ols   <- Y ~ D + age + female + educ + urban                # Fórmula: Y en función de D y controles X.
+ols_fit <- lm(f_ols, data=df)                                 # Estima MCO; útil para comparar con IV.
+ols_vcov <- vcovHC(ols_fit, type="HC1")                       # Var-Cov robusta (heterocedasticidad-consistente).
+print(coeftest(ols_fit, vcov.=ols_vcov))                      # Muestra coeficientes con EE robustos (interpretar β con cautela).
+# - β (coef de d) = cambio medio condicional; no causal si d está correlacionado con omitidas u_i.
 
-iv_fit <- ivreg(f_iv, data=df)
+# 4. IV / 2SLS con z como instrumento de d ------------------- # Estrategia causal: usa variación inducida por Z (geografía de señal).
+# - 1ª etapa: d_i = π0 + π1 z_i + δ'X_i + v_i                 # Verifica relevancia (π1≠0) y reporta F de exclusión.
+# - 2ª etapa:  y_i = α + τ d̂_i + γ'X_i + ε_i                 # τ identifica LATE en compliers, bajo independencia/exclusión/monotonicidad.
+f_iv   <- y ~ d + age + female + educ + urban | z + age + female + educ + urban # Fórmula IV: Y ~ D+X | Z+X.
+iv_fit <- ivreg(f_iv, data=df)                                # Estima 2SLS (ivreg): obtiene τ_IV (coef de D instrumentado).
+iv_vcov <- vcovHC(iv_fit, type="HC1")                         # Var-Cov robusta para IV (heterocedasticidad-consistente).
+print(coeftest(iv_fit, vcov.=iv_vcov))                        # Coeficientes IV con EE robustos; foco en τ (D).
 
-# VCOV robusta (HC1)
-iv_vcov <- sandwich::vcovHC(iv_fit, type="HC1")
-iv_sum  <- coeftest(iv_fit, vcov.=iv_vcov)
-print(iv_sum)
+# - Primera etapa explícita y F de exclusión ----------------- # Reporte estándar para descartar instrumentos débiles.
+fs_fit  <- lm(d ~ z + age + female + educ + urban, data=df)   # Modelo de 1ª etapa (D en función de Z y X).
+fs_vcov <- vcovHC(fs_fit, type="HC1")                         # Var-Cov robusta para la 1ª etapa.
+print(coeftest(fs_fit, vcov.=fs_vcov))                        # Coef de Z (π1) con EE robustos: magnitud y significancia.
+print(summary(iv_fit, vcov.=iv_vcov, diagnostics=TRUE)$diagnostics) # Diagnósticos AER: incluye prueba de “Weak instruments” (F).
 
-# 4(a) Primera etapa explícita (para reportar π1 y F de exclusión)
-f_fs <- as.formula(
-  paste(var_d, "~", var_z, if(length(ctrls)>0) paste("+", paste(ctrls, collapse="+")) else "")
-)
-fs_fit <- lm(f_fs, data=df)
-fs_vcov <- vcovHC(fs_fit, type="HC1")
-fs_res  <- coeftest(fs_fit, vcov.=fs_vcov)
-print(fs_res)
-
-# Diagnósticos de instrumentos (AER): incluye F de primera etapa y pruebas de debilidad
-iv_diag <- summary(iv_fit, vcov.=iv_vcov, diagnostics=TRUE)
-print(iv_diag$diagnostics)  # mira "Weak instruments"
-
-# RESPUESTA P3(a):
-# Primera etapa:  D_i = π0 + π1 Z_i + δ' X_i + v_i
-# Segunda etapa:  Y_i = α + τ D̂_i + γ' X_i + ε_i
-# τ (coef. de D̂_i) es el efecto causal (LATE) bajo supuestos I–IV.  :contentReference[oaicite:13]{index=13}
-# RESPUESTA P3(b) — Supuestos LATE:
-# I) Independencia: (Y(1),Y(0),D(1),D(0)) ⟂ z  ; 
-# II) Exclusión: Y(D,1)=Y(D,0)=Y(D);
-# III) Relevancia: E[D(1)-D(0)]≠0 ; 
-# IV) Monotonicidad: D(1)−D(0)≥0 (sin defiers).  :contentReference[oaicite:14]{index=14}
-# En Lumeria, (I) plausible por geografía; (II) puede fallar si el acceso afecta Y por canales
-# distintos a ver TV (miedo/sanciones); (III) fuerte si la sombra topográfica reduce señal;
-# (IV) creíble: tener señal no debería reducir la probabilidad de ver TV extranjera.
-# RESPUESTA P3(c):
-# Tipos: nunca-tratados, siempre-tratados, compliers, defiers; monotonicidad excluye defiers.  :contentReference[oaicite:15]{index=15}
-# LATE se estima sobre los compliers (quienes cambian D por Z).  :contentReference[oaicite:16]{index=16}
-# RESPUESTA P3(d):
-# ATE (pob. total), ATT (tratados), LATE (compliers). Coinciden si los efectos son homogéneos
-# (τ_i = τ ∀i); o si la subpoblación complier coincide con la tratada o con toda la población.  :contentReference[oaicite:17]{index=17}
-
-#### 5) (P4) Comparar MCO vs IV y reportar relevancia ----
-# Tabla compacta con β_MCO y τ_IV
+# 5. Comparación MCO vs IV ----------------------------------- # Contraste de magnitud y signo: revela dirección del sesgo MCO.
 modelsummary(
-  list("MCO"=ols_fit, "IV (2SLS)"=iv_fit),
-  vcov = list(ols_vcov, iv_vcov),
-  gof_map = tribble(
-    ~raw,                     ~clean,                            ~fmt,
-    "nobs",                   "Observaciones",                    0,
-    "r.squared",              "R^2",                              3
+  list("MCO" = ols_fit, "IV (2SLS)" = iv_fit),               # Lista de modelos a comparar.
+  vcov = list(ols_vcov, iv_vcov),                             # EE robustos para ambos modelos.
+  gof_map = tribble(                                          # Selección de medidas de ajuste a reportar.
+    ~raw,        ~clean,          ~fmt,
+    "nobs",      "Observaciones", 0,
+    "r.squared", "R^2",           3
   ),
-  statistic = "({std.error}){stars}",
-  stars = c('*' = .1, '**' = .05, '***' = .01)
+  statistic = "({std.error}){stars}",                         # Muestra EE entre paréntesis y estrellas de significancia.
+  stars = c('*'=.1,'**'=.05,'***'=.01)                        # Umbrales visuales estándar (informativos, no dogmáticos).
+)                                                              # La tabla sintetiza diferencias; si IV cambia magnitud/signo, sugiere sesgo OLS.
+
+# 6. Estimador de Wald --------------------------------------- # Versión cerrada cuando Z y D son binarios (LATE de compliers).
+EY1 <- mean(df$y[df$z==1], na.rm=TRUE); EY0 <- mean(df$y[df$z==0], na.rm=TRUE) # Reduced form: diferencia en Y por Z.
+ED1 <- mean(df$d[df$z==1], na.rm=TRUE); ED0 <- mean(df$d[df$z==0], na.rm=TRUE) # Primera etapa: diferencia en D por Z.
+wald_hat <- (EY1 - EY0) / (ED1 - ED0)                         # Cociente de Wald: LATE si se cumplen los supuestos.
+cat("Wald (muestral) =", wald_hat, "\n")                      # Imprime τ̂_W como chequeo rápido del 2SLS.
+
+# 7. Tabla(s) LaTeX de estadísticas descriptivas ------------- # Reporte formal reproducible para el documento.
+# - Binarios: proporción global y por Z                        # En IV interesa prevalencia y primera etapa visual.
+tab_bin <- df %>%
+  summarise(across(all_of(bin_vars),
+                   list(share = ~mean(.x, na.rm=TRUE)),
+                   .names = "{.col}_{.fn}")) %>%
+  tidyr::pivot_longer(everything(),
+                      names_to = c("var",".value"),
+                      names_pattern = "(.*)_(.*)") %>%
+  left_join(
+    df %>%
+      group_by(z) %>%
+      summarise(across(all_of(bin_vars), ~mean(.x, na.rm=TRUE),
+                       .names="{.col}_z{z}"),
+                .groups="drop") %>%
+      tidyr::pivot_longer(-z, names_to="var_z", values_to="share_z") %>%
+      tidyr::separate(var_z, into=c("var","zflag"), sep="_z") %>%
+      tidyr::pivot_wider(names_from=zflag, values_from=share_z,
+                         names_prefix="share_z"),
+    by="var"
+  ) %>%
+  mutate(N = nrow(df)) %>%
+  select(var, share, share_z0, share_z1, N)
+
+# - Continuas: media, sd, p25, p50, p75, min, max, y medias por Z # Dispersión global + balance por Z (medias).
+tab_cont <- df %>%
+  summarise(across(all_of(cont_vars),
+                   list(mean=~mean(.x,na.rm=TRUE),
+                        sd=~sd(.x,na.rm=TRUE),
+                        p25=~qfun(.x,0.25),
+                        p50=~qfun(.x,0.50),
+                        p75=~qfun(.x,0.75),
+                        min=~min(.x,na.rm=TRUE),
+                        max=~max(.x,na.rm=TRUE)),
+                   .names="{.col}_{.fn}")) %>%
+  tidyr::pivot_longer(everything(),
+                      names_to = c("var",".value"),
+                      names_pattern = "(.*)_(.*)") %>%
+  left_join(
+    df %>%
+      group_by(z) %>%
+      summarise(across(all_of(cont_vars), ~mean(.x, na.rm=TRUE),
+                       .names="{.col}_z{z}"),
+                .groups="drop") %>%
+      tidyr::pivot_longer(-z, names_to="var_z", values_to="mean_z") %>%
+      tidyr::separate(var_z, into=c("var","zflag"), sep="_z") %>%
+      tidyr::pivot_wider(names_from=zflag, values_from=mean_z,
+                         names_prefix="mean_z"),
+    by="var"
+  ) %>%
+  mutate(N = nrow(df)) %>%
+  select(var, mean, sd, p25, p50, p75, min, max, mean_z0, mean_z1, N)
+
+# - Etiquetas legibles y redondeo ---------------------------- # Mejora presentación para el paper/nota técnica.
+var_labels <- c(                                             # Diccionario de nombres → etiquetas en español.
+  y="Apoyo al régimen (y)",
+  d="Ve TV extranjera (d)",
+  z="Acceso señal (z)",
+  female="Mujer (female)",
+  urban="Urbano (urban)",
+  age="Edad (age)",
+  educ="Educación (años)"
 )
+tab_bin$Variable  <- var_labels[tab_bin$var]                  # Agrega etiqueta de variable a tabla de binarios.
+tab_cont$Variable <- var_labels[tab_cont$var]                 # Agrega etiqueta a tabla de continuas.
 
-# RESPUESTA P4(a):
-# Reporta π1 (coef de Z en la 1ª etapa) y su p-valor/IC. Revisa el F de exclusión:
-# F>10 sugiere instrumento no débil. (ver 'Weak instruments' en iv_diag).  :contentReference[oaicite:18]{index=18}
-# RESPUESTA P4(b):
-# Compara magnitud y signo: si |τ_IV| ≠ |β_MCO|, indica sesgo MCO (p.ej., selección negativa/positiva).
-# RESPUESTA P4(c) (≤200 palabras):
-# τ_IV es un LATE: efecto causal para compliers (hogares que verían TV extranjera si hay señal,
-# pero no la verían sin señal). La inferencia es local al margen inducido por Z; su validez interna
-# es alta, pero la validez externa depende de cuán representativos son los compliers del resto
-# (diferentes instrumentos identifican distintos LATE).  :contentReference[oaicite:19]{index=19}
+tab_bin_out <- tab_bin %>%
+  select(Variable, share, share_z0, share_z1, N) %>%          # Ordena columnas finales (binarios).
+  mutate(across(where(is.numeric), ~round(.x, 3)))            # Redondea a 3 decimales para LaTeX limpio.
 
-#### 6) (P5) Estimador de Wald y binarización de tratamientos ----
-# Wald muestral:  τ̂_W = [E(Y|Z=1)-E(Y|Z=0)] / [E(D|Z=1)-E(D|Z=0)]  (binario Z y D)
-EY1 <- mean(df[[var_y]][df[[var_z]]==1], na.rm=TRUE)
-EY0 <- mean(df[[var_y]][df[[var_z]]==0], na.rm=TRUE)
-ED1 <- mean(df[[var_d]][df[[var_z]]==1], na.rm=TRUE)
-ED0 <- mean(df[[var_d]][df[[var_z]]==0], na.rm=TRUE)
-wald_hat <- (EY1 - EY0) / (ED1 - ED0)
-wald_hat
+tab_cont_out <- tab_cont %>%
+  select(Variable, mean, sd, p25, p50, p75, min, max, mean_z0, mean_z1, N) %>% # Ordena columnas (continuas).
+  mutate(across(where(is.numeric), ~round(.x, 3)))            # Redondeo homogéneo.
 
-# RESPUESTA P5(a):
-# Wald (poblacional): τ = [E(Y|z=1)-E(Y|z=0)] / [E(D|z=1)-E(D|z=0)].
-# Numerador: efecto reducido de z sobre Y; Denominador: 1ª etapa de z sobre D.  :contentReference[oaicite:20]{index=20}
-# RESPUESTA P5(b):
-# Si el “tratamiento” real es continuo (horas W_i) y lo binarizamos D_i=1{W_i≥j*}, el
-# instrumento puede afectar Y a través de variación “intensiva” en W dentro de los bins
-# (no sólo cruzando j*), violando exclusión respecto a D. Válido sólo si (i) Y depende de W
-# únicamente vía el umbral (outcome-threshold invariance), o (ii) el instrumento desplaza W
-# exclusivamente cruzando j* (sin mover intensidades dentro de cada lado). Tests: chequear
-# independencia de Z con W condicional a D (balance interno), y sensibilidad del τ̂_W a
-# umbrales alternativos j*. (Idea basada en Eckhof & Huber, 2018).
+# - Imprimir LaTeX (booktabs) -------------------------------- # Produce código LaTeX pegable en el documento final.
+cat("\n% --- Tabla LaTeX: Binarios ---\n")                    # Comentario LaTeX para legibilidad del .tex.
+kable(tab_bin_out,
+      format = "latex", booktabs = TRUE, linesep = "",        # Formato LaTeX con booktabs y sin líneas extra.
+      caption = "Estadísticas descriptivas — variables binarias", # Título de la tabla.
+      col.names = c("Variable","Proporción","Proporción (Z=0)","Proporción (Z=1)","N"), # Encabezados claros.
+      label = "tab:desc_bin") %>%                             # Etiqueta para \ref.
+  kable_styling(latex_options=c("hold_position","striped")) %>% # Fijar posición y estilo listado.
+  print()                                                     # Emite el código LaTeX en la consola/salida.
 
-#### 7) (P6) Nueva evidencia: hogares con acceso deciden no ver por temor ----
-# RESPUESTA P6(a):
-# Relevancia (III) se debilita si el miedo reduce fuertemente D|Z=1; exclusión (II) peligra si Z
-# afecta Y vía miedo/sanción además de D; monotonicidad (IV) generalmente sigue plausible:
-# tener acceso no aumenta la probabilidad de NO ver con respecto a no tenerlo.  :contentReference[oaicite:21]{index=21}
-# RESPUESTA P6(b):
-# τ_IV sigue interpretándose como LATE para compliers restantes; si la 1ª etapa cae (F bajo),
-# aumentan preocupaciones por instrumentos débiles.  :contentReference[oaicite:22]{index=22}
-# RESPUESTA P6(c) (≤150 palabras):
-# No invalida por completo la estrategia: si (II) se sostiene tras controles/contexto y (IV) es creíble,
-# recuperamos un LATE local interpretable. Pero si el miedo impacta Y directamente, la exclusión
-# falla y el IV pierde interpretación causal. Análisis de falsación/balance y evidencia institucional
-# son cruciales.
-
-#### 8) Guardar resultados (opcional) ----
-# modelsummary puede exportar a LaTeX/HTML/MD:
-# modelsummary(list("MCO"=ols_fit,"IV (2SLS)"=iv_fit), output="modelos_IV_Lumeria.html", vcov=list(ols_vcov,iv_vcov))
-
-#### 9) Notas finales ----
-# - Considera clúster por región si existe variable 'region' en df (p.ej., usando vcovCL con ~region).
-# - Verificar robustez: especificaciones con/ sin controles X; submuestras geográficas; placebo outcomes.
-# - Documentar claramente la plausibilidad de (II) exclusión a la luz del contexto institucional.
+cat("\n% --- Tabla LaTeX: Continuas ---\n")                   # Comentario LaTeX para separar tablas en el .tex.
+kable(tab_cont_out,
+      format = "latex", booktabs = TRUE, linesep = "",        # Mismo estilo visual.
+      caption = "Estadísticas descriptivas — variables continuas", # Título de la tabla.
+      col.names = c("Variable","Media","Desv. Est.","P25","P50","P75","Mín","Máx","Media (Z=0)","Media (Z=1)","N"), # Encabezados.
+      label = "tab:desc_cont") %>%                            # Etiqueta para \ref.
+  kable_styling(latex_options=c("hold_position","striped")) %>% # Consistencia estética.
+  print()                                                     # Emite el código LaTeX listo para pegar/compilar.
