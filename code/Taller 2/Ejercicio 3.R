@@ -262,7 +262,7 @@ g_coef <- ggplot(coefs_all,
                 position = position_dodge(width = 0.30)) +
   geom_vline(xintercept = 0, linetype = "dashed") +
   labs(
-    x = "Efecto 2SLS de Rechazo_IVE (probabilidad)",
+    x = "Efecto 2SLS de Rechazo_IVE",
     y = NULL,
     title = "Efectos IV (2SLS) de Rechazo_IVE: ambos instrumentos con FE oficina×tiempo",
     subtitle = "IC 95% | FE: oficina×tiempo | SE agrupados por id_juez"
@@ -272,5 +272,72 @@ g_coef <- ggplot(coefs_all,
          shape = guide_legend(title = "Instrumento"))
 
 print(g_coef)
-# ggsave("coefplot_iv_unico.png", g_coef, width = 9, height = 4.5, dpi = 300)
+ggsave("coefplot_iv_unico.png", g_coef, width = 12, height = 10, dpi = 400)
 
+# Helper para extraer fila de la segunda etapa
+extract_row <- function(model, outcome, instrumento) {
+  b   <- coef(model)["fit_Rechazo_IVE"]
+  se_ <- fixest::se(model)["fit_Rechazo_IVE"]
+  ci  <- confint(model, level = 0.95)["fit_Rechazo_IVE", ]
+  p   <- 2 * pnorm(-abs(b / se_))
+  N   <- stats::nobs(model)
+
+  tibble::tibble(
+    Outcome     = outcome,
+    Instrumento = instrumento,
+    Coef        = as.numeric(b),
+    SE          = as.numeric(se_),
+    CI_95_inf   = as.numeric(ci[1]),
+    CI_95_sup   = as.numeric(ci[2]),
+    p_value     = as.numeric(p),
+    N           = as.integer(N)
+  )
+}
+
+# Tablas por instrumento
+tab_female <- dplyr::bind_rows(
+  extract_row(iv_nacimiento, "Nacimiento", "Female_Judge"),
+  extract_row(iv_muerte,     "Muerte",     "Female_Judge"),
+  extract_row(iv_infeccion,  "Infección",  "Female_Judge")
+)
+
+tab_severity <- dplyr::bind_rows(
+  extract_row(iv_nacimiento_sev, "Nacimiento", "Severidad_LOO"),
+  extract_row(iv_muerte_sev,     "Muerte",     "Severidad_LOO"),
+  extract_row(iv_infeccion_sev,  "Infección",  "Severidad_LOO")
+)
+
+# Medias de los outcomes entre no rechazadas (Rechazo_IVE == 0)
+means_no_rej <- estimation_sample |>
+  dplyr::filter(Rechazo_IVE == 0) |>
+  dplyr::summarise(
+    Nacimiento = mean(Nacimiento, na.rm = TRUE),
+    Muerte     = mean(Muerte,     na.rm = TRUE),
+    `Infección`  = mean(Infeccion,  na.rm = TRUE)
+  ) |>
+  tidyr::pivot_longer(dplyr::everything(),
+                      names_to = "Outcome",
+                      values_to = "Mean_no_rechazo")
+
+# Combinamos todo en una sola tabla
+tab_full <- dplyr::bind_rows(tab_female, tab_severity) |>
+  dplyr::left_join(means_no_rej, by = "Outcome") |>
+  dplyr::mutate(
+    Outcome     = factor(Outcome, levels = c("Nacimiento","Muerte","Infección")),
+    Instrumento = factor(Instrumento, levels = c("Female_Judge","Severidad_LOO"))
+  ) |>
+  dplyr::arrange(Outcome, Instrumento)
+
+# redondeo para lectura en consola
+tab_full_print <- tab_full |>
+  dplyr::mutate(
+    Coef            = round(Coef, 6),
+    SE              = round(SE, 6),
+    CI_95_inf       = round(CI_95_inf, 6),
+    CI_95_sup       = round(CI_95_sup, 6),
+    p_value         = signif(p_value, 3),
+    Mean_no_rechazo = round(Mean_no_rechazo, 6)
+  )
+
+# Imprimir la tabla completa en consola
+print(tab_full_print, n = Inf, width = Inf)
