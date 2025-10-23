@@ -14,7 +14,7 @@ library(tidyr)
 library(fixest)
 library(tidyverse)
 library(ggplot2)
-
+library(tidyverse)
 #### 4. Cargar datos
 sisben <- read_dta(paste0(datos, "\\sisben.dta"))
 
@@ -159,3 +159,118 @@ fe_severidad_formula <- "rechazo ~ woman_judge + severidad_nonIVE | id_oficina"
 
 esimacion1 <- feols(as.formula(fe_severidad_formula), data = df_ive, cluster = "id_juez")
 summary(esimacion1)
+
+#### 9. Estimación de la propuesta realizada en el punto 6 del taller,
+# usando Nacimiento, Muerte e Infección. 
+estimation_sample = read_dta(file.path(datos, "estimation_sample.dta"))
+
+# --- (1) NACIMIENTO -------------------------------------------------
+iv_nacimiento <- feols(
+  Nacimiento ~ 1 | oficina^time | Rechazo_IVE ~ Female_Judge,
+  data    = estimation_sample,
+  cluster = ~ id_juez
+)
+summary(iv_nacimiento)
+
+# --- (2) MUERTE -----------------------------------------------------
+iv_muerte <- feols(
+  Muerte ~ 1 | oficina^time | Rechazo_IVE ~ Female_Judge,
+  data    = estimation_sample,
+  cluster = ~ id_juez
+)
+summary(iv_muerte)
+
+# --- (3) INFECCIÓN --------------------------------------------------
+iv_infeccion <- feols(
+  Infeccion ~ 1 | oficina^time | Rechazo_IVE ~ Female_Judge,
+  data    = estimation_sample,
+  cluster = ~ id_juez
+)
+summary(iv_infeccion)
+
+# ---------- Instrumento alternativo: severidad del juez (leave-one-out) ----------
+# Z_{j(i)} = (sum_j D - D_i)/(n_j - 1)
+estimation_sample <- estimation_sample |>
+  dplyr::group_by(id_juez) |>
+  dplyr::mutate(
+    .sumD = sum(Rechazo_IVE, na.rm = TRUE),
+    .n    = dplyr::n(),
+    Z_severity_loo = dplyr::if_else(.n > 1, (.sumD - Rechazo_IVE)/(.n - 1), NA_real_)
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::mutate(Z_severity_loo = pmin(pmax(Z_severity_loo, 0), 1)) |>
+  dplyr::select(-.sumD, -.n)
+
+# Estimar con severidad LOO (misma FE: oficina^time)
+iv_nacimiento_sev <- feols(
+  Nacimiento ~ 1 | oficina^time | Rechazo_IVE ~ Z_severity_loo,
+  data    = estimation_sample,
+  cluster = ~ id_juez
+)
+summary(iv_nacimiento_sev)
+iv_muerte_sev <- feols(
+  Muerte ~ 1 | oficina^time | Rechazo_IVE ~ Z_severity_loo,
+  data    = estimation_sample,
+  cluster = ~ id_juez
+)
+summary(iv_muerte_sev)
+iv_infeccion_sev <- feols(
+  Infeccion ~ 1 | oficina^time | Rechazo_IVE ~ Z_severity_loo,
+  data    = estimation_sample,
+  cluster = ~ id_juez
+)
+summary(iv_infeccion_sev)
+
+# Recolectar coeficientes de 2SLS (segunda etapa) con IC95%
+tidy_one <- function(model, outcome){
+  broom::tidy(model, conf.int = TRUE) |>
+    dplyr::filter(term == "fit_Rechazo_IVE") |>
+    dplyr::mutate(outcome = outcome)
+}
+
+# Instrumento: Female_Judge
+coefs <- dplyr::bind_rows(
+  tidy_one(iv_nacimiento, "Nacimiento"),
+  tidy_one(iv_muerte,     "Muerte"),
+  tidy_one(iv_infeccion,  "Infección")
+) |>
+  dplyr::select(outcome, estimate, std.error, conf.low, conf.high, p.value) |>
+  dplyr::mutate(instrumento = "Female_Judge")
+
+# Instrumento: Severidad LOO
+coefs_sev <- dplyr::bind_rows(
+  tidy_one(iv_nacimiento_sev, "Nacimiento"),
+  tidy_one(iv_muerte_sev,     "Muerte"),
+  tidy_one(iv_infeccion_sev,  "Infección")
+) |>
+  dplyr::select(outcome, estimate, std.error, conf.low, conf.high, p.value) |>
+  dplyr::mutate(instrumento = "Severidad_LOO")
+
+# Combinar y ordenar
+coefs_all <- dplyr::bind_rows(coefs, coefs_sev)
+coefs_all$instrumento <- factor(coefs_all$instrumento, levels = c("Female_Judge","Severidad_LOO"))
+coefs_all$outcome     <- factor(coefs_all$outcome,     levels = c("Nacimiento","Muerte","Infección"))
+
+# Gráfico único (ambos instrumentos en el mismo espacio)
+x11()
+g_coef <- ggplot(coefs_all,
+                 aes(x = estimate, y = outcome,
+                     color = instrumento, shape = instrumento)) +
+  geom_point(size = 2, position = position_dodge(width = 0.30)) +
+  geom_errorbar(aes(xmin = conf.low, xmax = conf.high),
+                height = 0.15, orientation = "y",
+                position = position_dodge(width = 0.30)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Efecto 2SLS de Rechazo_IVE (probabilidad)",
+    y = NULL,
+    title = "Efectos IV (2SLS) de Rechazo_IVE: ambos instrumentos con FE oficina×tiempo",
+    subtitle = "IC 95% | FE: oficina×tiempo | SE agrupados por id_juez"
+  ) +
+  theme_minimal(base_size = 12) +
+  guides(color = guide_legend(title = "Instrumento"),
+         shape = guide_legend(title = "Instrumento"))
+
+print(g_coef)
+# ggsave("coefplot_iv_unico.png", g_coef, width = 9, height = 4.5, dpi = 300)
+
