@@ -219,7 +219,7 @@ g_coef <- ggplot(coefs, aes(x = estimate, y = outcome)) +
   ) +
   geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.5) +
   labs(
-    x = "Efecto 2SLS de Rechazo de tutela de IVE",
+    x = "Efecto 2SLS de Rechazo de tutela de IVE"
   ) +
   theme_minimal(base_size = 12) +
   theme(
