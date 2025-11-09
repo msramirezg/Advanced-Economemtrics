@@ -1,0 +1,30 @@
+#### Ejercicio 2
+# Proyecto:
+# Autores: Mahicol Ramírez - Simón Briceño
+# Fecha: 21 de noviembre de 2025
+# Descripción general:
+# 1)
+#
+# 2)
+#
+# 3)
+#
+#### 1. Cargar librerías
+# Instalación opcional (comentada para no interrumpir).
+# install.packages(c("haven","dplyr","AER","sandwich","lmtest",
+#                    "modelsummary","knitr","kableExtra"))
+library(haven)       # Lectura de .dta (Stata)
+library(dplyr)       # Manipulación de datos (pipes, summarise, etc.)
+library(AER)         # ivreg() para 2SLS y diagnósticos
+library(sandwich)    # Matrices de var-cov robustas (HC)
+library(lmtest)      # coeftest() con vcov robusta
+library(modelsummary)# Tablas de modelos MCO vs IV
+library(knitr)       # kable() para LaTeX
+library(kableExtra)  # Estética LaTeX (booktabs/striped)
+
+#### 2. Directorio y datos
+# Replicabilidad: fijar WD al directorio del script (RStudio).
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+root <- dirname(rstudioapi::getActiveDocumentContext()$path)
+datos <- paste0(root,"\\datos")
+resultados <- paste0(root,"\\Resultados")
