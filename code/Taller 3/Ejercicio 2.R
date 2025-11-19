@@ -192,21 +192,25 @@ dataprep.out <- dataprep(
   foo = as.data.frame(df),
   predictors = c("drivers_active", "avg_income_per_hour",
                  "total_trips", "accidents_std", "lrevenue"),
-  predictors.op = "mean",
+  #predictors.op = "mean",
   dependent = "lrevenue",
   unit.variable = "city_id",
   time.variable = "month_number",
   treatment.identifier = treat_city, # Ciudad 8
   controls.identifier = control_units, # Otras ciudades
   # covariables definidas solo en enero de 2024
-  time.predictors.prior = time_pre, # Periodos pre tratamiento 0-74
+  time.predictors.prior = pred_month_num, # Periodos pre tratamiento 0-74
   # ventana pretratamiento para ajustar el SSR
-  time.optimize.ssr = pred_month_num, # Periodo enero 2024 = 72
+  time.optimize.ssr = time_pre, # Periodo enero 2024 = 72
   # serie completa para graficar
   time.plot = sort(unique(df$month_number)),
-  special.predictors = list(
-    list("lrevenue", pred_month_num, "mean")  # log(revenue) en 2024-01
-  )
+  #special.predictors = list(
+    #list("lrevenue", pred_month_num, "mean"),  # log(revenue) en 2024-01
+    #list("drivers_active", pred_month_num, "mean"  ),
+    #list("avg_income_per_hour", pred_month_num, "mean"  ),
+    #list("total_trips", pred_month_num, "mean"  ),
+    #list("accidents_std", pred_month_num, "mean"  )  
+  #)
 )
 #  16.35 / drivers active 306.01
 
