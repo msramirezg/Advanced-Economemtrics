@@ -32,7 +32,6 @@ if (!dir.exists(resultados)) dir.create(resultados, recursive = TRUE)
 
 # Importar base principal.
 df <- read_dta(file.path(datos, "CS_data.dta"))
-
 #### Conversión correcta de Stata %tm -> Date (primer día del mes)
 tm_to_date <- function(tm) {
   y <- 1960 + floor(tm / 12)
@@ -60,8 +59,7 @@ df <- df |>
   mutate(
     city_id        = as.integer(city_id),
     treated_city   = city_id == treat_city,
-    revenue_pos    = ifelse(revenue <= 0 | is.na(revenue), NA_real_, revenue),
-    lrevenue       = log(revenue_pos)
+    lrevenue       = log(revenue)
   )
 
 #### 3. Tema base para gráficas
@@ -152,20 +150,12 @@ ggsave(filename = file.path(resultados, "fig_3_accidentes_std.png"),
 # Mostrar en visor interactivo (opcional en sesión)
 print(p1); print(p2); print(p3)
 
-colnames(df)
-
 #### 7. Control sintético para la Ciudad 8 (método de Abadie, 2005)
 # ---------------------------------------------------------------
-
+df$lrev <- log(df$revenue) # Creo la variable de nuevo por seguridad 
 #### 8. Parámetros básicos del tratamiento ----
 treat_city  <- 8L
-treat_start <- as.Date("2024-04-01")
-
-# month_number correspondiente al inicio del tratamiento
-treat_time <- df |>
-  filter(date_m == treat_start) |>
-  distinct(month_number) |>
-  pull()
+treat_start <- 75L # abril 2024
 
 # month_number correspondiente a enero de 2024 (3 meses antes del tratamiento)
 pred_month_num <- df |>
@@ -174,11 +164,7 @@ pred_month_num <- df |>
   pull()
 
 # Vector de tiempos pretratamiento
-time_pre <- df |>
-  filter(date_m < treat_start) |>
-  distinct(month_number) |>
-  arrange(month_number) |>
-  pull()
+time_pre <- 0:74  # meses 0 a 74 (enero 2018 a marzo 2024)
 
 # Unidades de control
 control_units <- setdiff(sort(unique(df$city_id)), treat_city)
@@ -188,31 +174,27 @@ control_units <- setdiff(sort(unique(df$city_id)), treat_city)
 # Predictores (enero 2024): drivers_active, avg_income_per_hour, total_trips, accidents_std
 # + log(revenue) en enero 2024
 
-dataprep.out <- dataprep(
+
+dataprep.out <- Synth::dataprep(
   foo = as.data.frame(df),
-  predictors = c("drivers_active", "avg_income_per_hour",
-                 "total_trips", "accidents_std", "lrevenue"),
-  #predictors.op = "mean",
-  dependent = "lrevenue",
+  dependent = "lrev",
   unit.variable = "city_id",
   time.variable = "month_number",
-  treatment.identifier = treat_city, # Ciudad 8
-  controls.identifier = control_units, # Otras ciudades
-  # covariables definidas solo en enero de 2024
-  time.predictors.prior = pred_month_num, # Periodos pre tratamiento 0-74
-  # ventana pretratamiento para ajustar el SSR
-  time.optimize.ssr = time_pre, # Periodo enero 2024 = 72
-  # serie completa para graficar
+  treatment.identifier = treat_city,
+  controls.identifier = control_units,
+  time.predictors.prior = time_pre,
+  time.optimize.ssr = time_pre,
   time.plot = sort(unique(df$month_number)),
-  #special.predictors = list(
-    #list("lrevenue", pred_month_num, "mean"),  # log(revenue) en 2024-01
-    #list("drivers_active", pred_month_num, "mean"  ),
-    #list("avg_income_per_hour", pred_month_num, "mean"  ),
-    #list("total_trips", pred_month_num, "mean"  ),
-    #list("accidents_std", pred_month_num, "mean"  )  
-  #)
+  predictors = c("drivers_active", "avg_income_per_hour", 
+                 "total_trips","accidents_std", "lrev"),
+  special.predictors = list(
+    list("drivers_active", 72, "mean"),
+    list("avg_income_per_hour", 72, "mean"),
+    list("total_trips", 72, "mean"),
+    list("accidents_std", 72, "mean"),
+    list("lrev", 72, "mean")
+  )
 )
-#  16.35 / drivers active 306.01
 
 # Estimar el control sintético
 synth.out <- synth(dataprep.out)
@@ -256,7 +238,7 @@ p_synth_abadie <- ggplot(df_synth_abadie, aes(x = date_m)) +
             color = "#1f78b4", linewidth = 1) +
   geom_line(aes(y = lrevenue_synth),
             color = "grey30", linewidth = 1, linetype = "dashed") +
-  geom_vline(xintercept = treat_start, linetype = "dashed") +
+  geom_vline(xintercept = as.Date("2024-04-01"), linetype = "dashed") +
   labs(
     title    = "Control sintético (Abadie, 2005) para la Ciudad 8",
     subtitle = "Ganancias en logaritmos: observado vs sintético",
@@ -272,54 +254,45 @@ print(p_synth_abadie)
 
 
 #### 10. Método alternativo: Pesos de Regresión (OLS, sin covariables) ----
-# Formato wide: cada ciudad = una columna con lrevenue
 
+# 1. Pasar a formato wide
 wide_df <- df |>
-  select(month_number, date_m, city_id, lrevenue) |>
-  arrange(month_number, city_id) |>
+  select(month_number, city_id, lrev) |>
   pivot_wider(
     names_from  = city_id,
-    values_from = lrevenue,
+    values_from = lrev,
     names_prefix = "city_"
-  )
+  ) |>
+  arrange(month_number)
 
-# Identificar columnas de ciudades
-city_cols <- grep("^city_", names(wide_df), value = TRUE)
-treated_col_name <- paste0("city_", treat_city)
-control_col_names <- setdiff(city_cols, treated_col_name)
+# 2. Definir tratada y controles
+treated_col  <- paste0("city_", treat_city)
+control_cols <- setdiff(grep("^city_", names(wide_df), value = TRUE),
+                        treated_col)
 
-# Separar periodo pre y post tratamiento
-wide_pre  <- wide_df |> filter(month_number < treat_time)
-wide_post <- wide_df |> filter(month_number >= treat_time)
+# 3. Filtrar periodo pre-tratamiento
+wide_pre <- wide_df |> filter(month_number < treat_start)
 
-Y_pre_mat  <- as.matrix(wide_pre[ , city_cols])
-Y_post_mat <- as.matrix(wide_post[ , city_cols])
+# 4. Estimar OLS sin intercepto
+fmla <- reformulate(control_cols, response = treated_col)
+ols_fit <- lm(update(fmla, . ~ . - 1), data = wide_pre)
 
-# Índices numéricos de tratada y controles
-treated_col_idx  <- which(colnames(Y_pre_mat) == treated_col_name)
-control_col_idx  <- which(colnames(Y_pre_mat) %in% control_col_names)
+# 5. Normalizar pesos a que sumen 1
+ols_weights_norm <- coef(ols_fit) / sum(coef(ols_fit))
 
-# 10.1. Estimar pesos OLS para la Ciudad 8 ----
-df_reg <- data.frame(
-  Y_treated = Y_pre_mat[, treated_col_idx],
-  Y_pre_mat[, control_col_idx, drop = FALSE]
-)
-
-ols_fit <- lm(Y_treated ~ 0 + ., data = df_reg)
-ols_weights <- coef(ols_fit)          # pesos sin normalizar
-ols_weights_norm <- ols_weights / sum(ols_weights)  # normalizados a que sumen 1
-
-# Ordenar en data.frame legible
+# 6. Tabla legible
 ols_weights_df <- data.frame(
-  ciudad          = gsub("city_", "Ciudad ", names(ols_weights_norm)),
-  peso_regresion  = as.numeric(ols_weights_norm)
+  ciudad         = gsub("city_", "Ciudad ", names(ols_weights_norm)),
+  peso_regresion = as.numeric(ols_weights_norm)
 ) |>
   arrange(ciudad)
 
-# Exportar pesos OLS para llenar tabla \ref{tabla_pesos}
-write.csv(ols_weights_df,
-          file.path(resultados, "tabla_pesos_regresion.csv"),
-          row.names = FALSE)
+# 7. Exportar tabla para LaTeX
+write.csv(
+  ols_weights_df,
+  file.path(resultados, "tabla_pesos_regresion.csv"),
+  row.names = FALSE
+)
 
 # 10.2. Construir contrafactual sintético postratamiento (OLS) ----
 Y_post_controls <- Y_post_mat[, control_col_idx, drop = FALSE]
@@ -333,24 +306,111 @@ df_synth_ols <- data.frame(
 )
 
 p_synth_ols <- ggplot(df_synth_ols, aes(x = date_m)) +
-  geom_line(aes(y = lrevenue_treated),
-            color = "#1f78b4", linewidth = 1) +
-  geom_line(aes(y = lrevenue_synth),
-            color = "grey40", linewidth = 1, linetype = "dashed") +
-  geom_vline(xintercept = treat_start, linetype = "dashed") +
+  geom_line(
+    aes(y = lrevenue_treated),
+    color = "#1f78b4", linewidth = 1
+  ) +
+  geom_line(
+    aes(y = lrevenue_synth),
+    color = "grey40", linewidth = 1, linetype = "dashed"
+  ) +
+  
+  # Label para Ciudad 8 (observado)
+  geom_text(
+    data = df_synth_ols %>% slice_tail(n = 1),
+    aes(y = lrevenue_treated, label = "Ciudad 8"),
+    color = "#1f78b4",
+    hjust = -0.1, vjust = 0,
+    size = 4
+  ) +
+  
+  # Label para control sintético OLS
+  geom_text(
+    data = df_synth_ols %>% slice_tail(n = 1),
+    aes(y = lrevenue_synth, label = "Control sintético (OLS)"),
+    color = "grey40",
+    hjust = -0.1, vjust = 0,
+    size = 4
+  ) +
+
+  geom_vline(xintercept = as.Date("2024-04-01"), linetype = "dashed") +
+  
   labs(
     title    = "Control sintético vía Pesos de Regresión (OLS)",
-    subtitle = "Ganancias en logaritmos: observado vs combinación OLS",
+    subtitle = "Ganancias en logaritmos: Ciudad 8 vs contrafactual",
     y        = "log(Revenue)",
     x        = "",
     caption  = "Fuente: CS_data.dta. Elaboración propia."
   ) +
-  theme_base
+  
+  coord_cartesian(clip = "off") +  # permite que las etiquetas salgan del panel
+  theme_base +
+  theme(plot.margin = margin(5.5, 40, 5.5, 5.5))  # margen derecho para que no recorte el label
 
 ggsave(file.path(resultados, "fig_5_synth_ols.png"),
        p_synth_ols, width = 9, height = 4.8, dpi = 300)
 print(p_synth_ols)
 
+## Con pesos de Abadie
+# Filtrar únicamente el periodo post-tratamiento
+df_synth_abadie_post <- df_synth_abadie |>
+  filter(month_number >= treat_start)
+
+p_synth_abadie_post <- ggplot(df_synth_abadie_post, aes(x = date_m)) +
+  # Línea Ciudad 8 (tratada)
+  geom_line(
+    aes(y = lrevenue_treated),
+    color = "#1f78b4",
+    linewidth = 1
+  ) +
+  # Línea control sintético (Abadie)
+  geom_line(
+    aes(y = lrevenue_synth),
+    color = "grey30",
+    linewidth = 1,
+    linetype = "dashed"
+  ) +
+  
+  # Label para Ciudad 8
+  geom_text(
+    data = df_synth_abadie_post %>% slice_tail(n = 1),
+    aes(y = lrevenue_treated, label = "Ciudad 8"),
+    color = "#1f78b4",
+    hjust = -0.1, vjust = 0,
+    size = 4
+  ) +
+  
+  # Label para control sintético (Abadie)
+  geom_text(
+    data = df_synth_abadie_post %>% slice_tail(n = 1),
+    aes(y = lrevenue_synth, label = "Control sintético (Abadie)"),
+    color = "grey30",
+    hjust = -0.1, vjust = 0,
+    size = 4
+  ) +
+
+  geom_vline(xintercept = as.Date("2024-04-01"), linetype = "dashed") +
+  
+  labs(
+    title    = "Control sintético (Abadie, 2005) — Solo periodo postratamiento",
+    subtitle = "Ganancias en logaritmos: Ciudad 8 vs control sintético",
+    y        = "log(Revenue)",
+    x        = "",
+    caption  = "Fuente: CS_data.dta. Elaboración propia."
+  ) +
+  
+  coord_cartesian(clip = "off") +
+  theme_base +
+  theme(
+    plot.margin = margin(5.5, 40, 5.5, 5.5)
+  )
+
+print(p_synth_abadie_post)
+
+ggsave(
+  file.path(resultados, "fig_4_synth_abadie_post.png"),
+  p_synth_abadie_post, width = 9, height = 4.8, dpi = 300
+)
 
 #### 11. Tabla combinada de pesos: Abadie (2005) vs OLS ----
 # Pesos de Abadie (2005): vienen en synth.tables$tab.w
@@ -395,18 +455,21 @@ control_units <- setdiff(sort(unique(df$city_id)), treat_city)
 # Preparar los datos para el paquete Synth
 dataprep.acc <- dataprep(
   foo = as.data.frame(df),
-  predictors = c("drivers_active", "avg_income_per_hour", "total_trips"),
+  predictors = c("drivers_active", "avg_income_per_hour", "total_trips", "accidents_std"),
   predictors.op = "mean",
   dependent = "accidents_std",
   unit.variable = "city_id",
   time.variable = "month_number",
   treatment.identifier = treat_city,
   controls.identifier = control_units,
-  time.predictors.prior = time_pre,      # enero 2024
-  time.optimize.ssr    = time_pre,              # ventana pretratamiento
+  time.predictors.prior = time_pre,      
+  time.optimize.ssr    = time_pre,
   time.plot = sort(unique(df$month_number)),
   special.predictors = list(
-    list("accidents_std", pred_month_num, "mean")  # incluir accidentes enero 2024
+    list("drivers_active", 72, "mean"),
+    list("avg_income_per_hour", 72, "mean"),
+    list("total_trips", 72, "mean"),
+    list("accidents_std", 72, "mean")
   )
 )
 
