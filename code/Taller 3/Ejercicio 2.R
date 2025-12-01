@@ -1,13 +1,7 @@
 #### Ejercicio 2
 # Proyecto: Evaluación de programa de incentivos con control sintético
 # Autores: Mahicol Ramírez - Simón Briceño
-# Fecha: 21 de noviembre de 2025
-# Descripción general:
-# 1) Graficar revenue por ciudad, destacando Ciudad 8 y la fecha 2024-04.
-# 2) Graficar log(revenue) y discutir ventajas de la escala logarítmica.
-# 3) Graficar accidents_std destacando Ciudad 8 y la fecha 2024-04.
-# 4) Estimar controles sintéticos para revenue y accidentes (Synth y OLS).
-# 5) Comparar ajuste pretratamiento mediante RMSPE para ambos métodos.
+# Fecha: 24 de noviembre de 2025
 
 rm(list = ls())  # Limpiamos el entorno para evitar conflictos de objetos
 
@@ -36,6 +30,7 @@ if (!dir.exists(resultados)) dir.create(resultados, recursive = TRUE)
 # Cargamos la base principal con información de ciudades y meses
 df <- read_dta(file.path(datos, "CS_data.dta"))
 
+colnames(df)
 #### 3. Conversión de fechas y definición de variables básicas
 # Función que convierte fechas Stata %tm a objetos Date (primer día del mes)
 tm_to_date <- function(tm) {
@@ -196,7 +191,7 @@ ols_fit <- lm(update(fmla, . ~ . - 1), data = wide_pre)
 # Normalizamos los coeficientes para que los pesos sumen uno
 ols_weights_norm <- coef(ols_fit) / sum(coef(ols_fit))
 
-# Construimos tabla de pesos OLS por ciudad de control para el informe
+# Construimos tabla de pesos OLS por ciudad de control 
 ols_weights_df <- data.frame(
   ciudad         = gsub("city_", "Ciudad ", names(ols_weights_norm)),
   peso_regresion = as.numeric(ols_weights_norm)
@@ -777,7 +772,7 @@ fig_placebos_panel <- (p_placebos_lrev + p_placebos_acc) + plot_layout(nrow = 1)
 
 # Mostrar en dispositivo gráfico
 x11()
-fig_placebos_panel
+print(fig_placebos_panel)
 
 # Guardar en carpeta 'Resultados'
 ggplot2::ggsave(
